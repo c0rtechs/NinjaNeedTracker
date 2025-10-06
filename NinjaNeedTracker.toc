@@ -1,0 +1,7 @@
+## Interface: 50400
+## Title: NinjaNeedTracker
+## Notes: Flags group members who roll NEED on gear they can't use (MoP Classic).
+## Author: Ndura
+## Version: 1.0.0
+## SavedVariables: NinjaNeedDB
+NinjaNeedTracker.lua
