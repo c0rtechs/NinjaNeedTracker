@@ -5,12 +5,14 @@
 local ADDON = "NinjaNeedTracker"
 local NNT = CreateFrame("Frame")
 NNT.roster = {}
-NNT.cfg = {
+NinjaNeedCFG = NinjaNeedCFG or {
   verbose = true,
   checkWeapons = true,       -- toggle weapon-eligibility checks
   checkArmor = true,         -- toggle armor-eligibility checks
-  announceInInstance = true, -- echo to INSTANCE_CHAT if you're in LFG/RDF
+  publicShame = true,        -- send public shame messages to party/raid/instance
+  saveHistory = true,        -- persist offender history in SavedVariables
 }
+NNT.cfg = NinjaNeedCFG
 
 -- Saved DB { offenders = { ["Name-Realm"] = { count=n, last=timestamp } } }
 NinjaNeedDB = NinjaNeedDB or { offenders = {} }
@@ -142,19 +144,33 @@ local function Announce(msg)
   if NNT.cfg.verbose then
     print("|cffff5050[NNT]|r "..msg)
   end
-  if NNT.cfg.announceInInstance and IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then
-    SendChatMessage("[NNT] "..msg, "INSTANCE_CHAT")
+  if NNT.cfg.publicShame then
+    local channel
+    if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then
+      channel = "INSTANCE_CHAT"
+    elseif IsInRaid() then
+      channel = "RAID"
+    elseif IsInGroup() then
+      channel = "PARTY"
+    end
+    if channel then
+      SendChatMessage("[NNT] "..msg, channel)
+    end
   end
 end
 
 -- Record an offense
 local function FlagOffense(player, itemLink, reason)
   local key = CanonicalName(player)
-  local t = NinjaNeedDB.offenders[key] or { count=0, last=0 }
-  t.count = t.count + 1
-  t.last  = time()
-  NinjaNeedDB.offenders[key] = t
-  Announce(("Flagged |cffd9d919%s|r NEED on %s |cffff7070(%s)|r — offenses: |cffffd100%d|r"):format(player, itemLink, reason, t.count))
+  local countStr = ""
+  if NNT.cfg.saveHistory then
+    local t = NinjaNeedDB.offenders[key] or { count=0, last=0 }
+    t.count = (t.count or 0) + 1
+    t.last  = time()
+    NinjaNeedDB.offenders[key] = t
+    countStr = (" — offenses: |cffffd100%d|r"):format(t.count)
+  end
+  Announce(("Flagged |cffd9d919%s|r NEED on %s |cffff7070(%s)|r%s"):format(player, itemLink, reason, countStr))
 end
 
 -- Determine if the class can use the armor type
@@ -303,6 +319,7 @@ SlashCmdList.NNT = function(msg)
   elseif msg == "weapons off" then
     NNT.cfg.checkWeapons = false; print("|cffff5050[NNT]|r Weapon checks OFF")
 
+
   elseif msg == "armor on" then
     NNT.cfg.checkArmor = true; print("|cffff5050[NNT]|r Armor checks ON")
   elseif msg == "armor off" then
@@ -349,5 +366,51 @@ NNT:RegisterEvent("CHAT_MSG_LOOT")
 C_Timer.After(2, function()
   print("|cffff5050[NNT]|r loaded. Armor checks: "..(NNT.cfg.checkArmor and "ON" or "OFF")
         ..", Weapon checks: "..(NNT.cfg.checkWeapons and "ON" or "OFF")
+
         ..". Type |cffffff00/nnt|r for options.")
 end)
+
+-- Compat: register options panel across clients (Settings API vs InterfaceOptions)
+local function AddOptionsCategory(frame, name)
+  if type(Settings) == "table"
+     and type(Settings.RegisterCanvasLayoutCategory) == "function"
+     and type(Settings.RegisterAddOnCategory) == "function" then
+    local category = Settings.RegisterCanvasLayoutCategory(frame, name)
+    Settings.RegisterAddOnCategory(category)
+  elseif type(InterfaceOptions_AddCategory) == "function" then
+    InterfaceOptions_AddCategory(frame)
+  elseif type(InterfaceOptionsFrame_AddCategory) == "function" then
+    InterfaceOptionsFrame_AddCategory(frame)
+  end
+end
+
+-- Options panel (MoP Classic Interface Options)
+ do
+   local panel = CreateFrame("Frame", "NNTOptionsPanel")
+   panel.name = "NinjaNeedTracker"
+
+   local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+   title:SetPoint("TOPLEFT", 16, -16)
+   title:SetText("NinjaNeedTracker")
+
+   local function NewCheckbox(parent, label, tooltip, settingKey, yOff)
+     local name = "NNTOptions_"..settingKey
+     local cb = CreateFrame("CheckButton", name, parent, "InterfaceOptionsCheckButtonTemplate")
+     cb:SetPoint("TOPLEFT", 16, yOff)
+     _G[name.."Text"]:SetText(label)
+     cb.tooltipText = label
+     cb.tooltipRequirement = tooltip
+     cb:SetScript("OnClick", function(self)
+       NNT.cfg[settingKey] = self:GetChecked() and true or false
+     end)
+     cb:SetScript("OnShow", function(self)
+       self:SetChecked(NNT.cfg[settingKey])
+     end)
+     return cb
+   end
+
+   NewCheckbox(panel, "Public shame in group chat", "Send NNT alerts to PARTY/RAID/INSTANCE chat", "publicShame", -8)
+   NewCheckbox(panel, "Save history", "Persist offender counts to SavedVariables", "saveHistory", -40)
+
+   AddOptionsCategory(panel, "NinjaNeedTracker")
+ end
